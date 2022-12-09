@@ -1,108 +1,113 @@
-import re
+
 import pickle
+import numpy as np 
+import pandas as pd
+import warnings
+warnings.filterwarnings("ignore")
 
-# nltk
-from nltk.stem import WordNetLemmatizer
-
-
-lemmatizer = WordNetLemmatizer()
-# grouping together the inflected forms ("better" -> "good")
-
-
-with open('models/pipeline.pickle', 'rb') as f:
-    loaded_pipe = pickle.load(f)
-
-
-def predict_pipeline(text):
-    return predict(loaded_pipe, text)
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import LinearSVC
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 
-# Defining dictionary containing all emojis with their meanings.
-emojis = {':)': 'smile', ':-)': 'smile', ';d': 'wink', ':-E': 'vampire', ':(': 'sad', 
-          ':-(': 'sad', ':-<': 'sad', ':P': 'raspberry', ':O': 'surprised',
-          ':-@': 'shocked', ':@': 'shocked',':-$': 'confused', ':\\': 'annoyed', 
-          ':#': 'mute', ':X': 'mute', ':^)': 'smile', ':-&': 'confused', '$_$': 'greedy',
-          '@@': 'eyeroll', ':-!': 'confused', ':-D': 'smile', ':-0': 'yell', 'O.o': 'confused',
-          '<(-_-)>': 'robot', 'd[-_-]b': 'dj', ":'-)": 'sadsmile', ';)': 'wink', 
-          ';-)': 'wink', 'O:-)': 'angel','O*-)': 'angel','(:-D': 'gossip', '=^.^=': 'cat'}
+# path 
+path = "./models"
 
-## Defining set containing all stopwords in english.
-stopwords = ['a', 'about', 'above', 'after', 'again', 'ain', 'all', 'am', 'an',
-             'and','any','are', 'as', 'at', 'be', 'because', 'been', 'before',
-             'being', 'below', 'between','both', 'by', 'can', 'd', 'did', 'do',
-             'does', 'doing', 'down', 'during', 'each','few', 'for', 'from', 
-             'further', 'had', 'has', 'have', 'having', 'he', 'her', 'here',
-             'hers', 'herself', 'him', 'himself', 'his', 'how', 'i', 'if', 'in',
-             'into','is', 'it', 'its', 'itself', 'just', 'll', 'm', 'ma',
-             'me', 'more', 'most','my', 'myself', 'now', 'o', 'of', 'on', 'once',
-             'only', 'or', 'other', 'our', 'ours','ourselves', 'out', 'own', 're',
-             's', 'same', 'she', "shes", 'should', "shouldve",'so', 'some', 'such',
-             't', 'than', 'that', "thatll", 'the', 'their', 'theirs', 'them',
-             'themselves', 'then', 'there', 'these', 'they', 'this', 'those', 
-             'through', 'to', 'too','under', 'until', 'up', 've', 'very', 'was',
-             'we', 'were', 'what', 'when', 'where','which','while', 'who', 'whom',
-             'why', 'will', 'with', 'won', 'y', 'you', "youd","youll", "youre",
-             "youve", 'your', 'yours', 'yourself', 'yourselves']
+# folder names where models live
+folders = [
+    "/call_to_action", 
+    "/credibility_statement",
+    "/greeting",
+    "/intention_statement",
+    "/intro",
+    "/problem_statement",
+    "/sign_off",
+    "/value_prop",
+    "/warm_up"
+
+]
+
+# model name
+model_names = [
+    "/linearSVC_clf.pkl",
+    "/logReg_clf.pkl",
+    "/multinomialNB_clf.pkl",
+    "/randomForest_clf.pkl"
+]
 
 
-def preprocess(textdata):
-    processed_texts = []
+def predict_pipeline(pred_text):
+    
+    import statistics
+    import operator
 
-    # Defining regex patterns.
-    url_pattern = r"((http://)[^ ]*|(https://)[^ ]*|( www\.)[^ ]*)"
-    user_pattern = '@[^\s]+'
-    alpha_pattern = "[^a-zA-Z0-9]"
-    sequence_pattern = r"(.)\1\1+"
-    seq_replace_pattern = r"\1\1"
+    path = "./models"
+    
+    folders = ["/call_to_action", "/credibility_statement","/greeting","/intention_statement",
+                "/intro","/problem_statement","/sign_off","/value_prop","/warm_up"]
+    
+    label = [s.replace("/", "") for s in folders]
 
-    for tweet in textdata:
-        tweet = tweet.lower()
+    model_names = ["/linearSVC_clf.pkl","/logReg_clf.pkl","/mutlinomialNB_clf.pkl","/randomForest_clf.pkl"]
 
-        # Replace all URls with 'URL'
-        tweet = re.sub(url_pattern, ' URL', tweet)
-        # Replace all emojis.
-        for emoji in emojis.keys():
-            tweet = tweet.replace(emoji, "EMOJI" + emojis[emoji])
-            # Replace @USERNAME to 'USER'.
-        tweet = re.sub(user_pattern, ' USER', tweet)
-        # Replace all non alphabets.
-        tweet = re.sub(alpha_pattern, " ", tweet)
-        # Replace 3 or more consecutive letters by 2 letter.
-        tweet = re.sub(sequence_pattern, seq_replace_pattern, tweet)
+    pred_confidence = []
 
-        preprocessed_words = []
-        for word in tweet.split():
-            # Check if the word is a stopword.
-            if len(word) > 1 and word not in stopwords:
-                # Lemmatizing the word.
-                word = lemmatizer.lemmatize(word)
-                preprocessed_words.append(word)
+    for folder in folders:
+        # load tfidf
+        tf1 = pickle.load(open(path+folder+ "/tfidf1.pkl", 'rb'))# loading dictionary
+        # Create new tfidfVectorizer with old vocabulary
+        tf1_new = TfidfVectorizer(sublinear_tf=True, norm='l2', 
+                                encoding='latin-1', ngram_range=(1, 2), 
+                                stop_words=None, vocabulary = tf1)# to use trained vectorizer, vocabulary= tf1 or loaded dict.
+        # fit text you want to predict 
+        X_tf1 = tf1_new.fit_transform([pred_text])
 
-        processed_texts.append(' '.join(preprocessed_words))
+        # list of model results per category 
+        res = []
 
-    return processed_texts
+        for model in model_names:
+            clf = pickle.load(open(path + folder + model,'rb')) # loading model 
+            res.append(clf.predict_proba(X_tf1)[0][1]) # predict
 
+        pred = statistics.mean(res) # get average confindence from 4 models 
 
-def predict(model, text):
-    # Predict the sentiment
-    preprocessed_text = preprocess(text)
-    predictions = model.predict(preprocessed_text)
+        pred_confidence.append(round(pred,4))
+    
 
-    pred_to_label = {0: 'Negative', 1: 'Positive'}
+ 
+    # create dictionary of preds 
+    preds = {label[i]: pred_confidence[i] for i in range(len(label))}
+    # sort dictionary by values
+    preds = {k: v for k, v in sorted(preds.items(), key=lambda item: item[1], reverse=True)}
+
+    
+    first = next(iter(preds.items()))
+    prediction = first[0]
+    confidence = (round((first[1] * 100), 2))
+
+    
 
     # Make a list of text with sentiment.
+    #data = []
+    #data.append({'predictions': first, 'sentence': pred_text})
+
     data = []
-    for t, pred in zip(text, predictions):
-        data.append({'text': t, 'pred': int(pred), 'label': pred_to_label[pred]})
+    data.append({'prediction': prediction, 
+                'confidence': confidence,
+                 'sentence': pred_text,
+                 'preds':preds})
+
+    # return all instances of preds
+    
 
     return data
 
 
-if __name__=="__main__":
-    # Text to classify should be in a list.
-    text = ["I hate twitter",
-            "May the Force be with you.",
-            "Mr. Stark, I don't feel so good"]
-    
-    predictions = predict_pipeline(text)
-    print(predictions)
+
+
+
+
+
